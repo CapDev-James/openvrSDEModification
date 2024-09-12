@@ -112,7 +112,10 @@ public:
 	bool CreateAllShaders();
 
 	CGLRenderModel *FindOrLoadRenderModel( const char *pchRenderModelName );
-
+	vr::HmdQuaternion_t  GetRotation(vr::HmdMatrix34_t matrix);
+	vr::HmdVector3_t GetPosition(vr::HmdMatrix34_t matrix);
+	void printPositionalData();
+	void printDevicePositionalData(const char* deviceName, vr::HmdMatrix34_t posMatrix, vr::HmdVector3_t position, vr::HmdQuaternion_t quaternion);
 private: 
 	bool m_bDebugOpenGL;
 	bool m_bVerbose;
@@ -440,8 +443,8 @@ bool CMainApplication::BInit()
 
 	// Loading the SteamVR Runtime
 	vr::EVRInitError eError = vr::VRInitError_None;
-	m_pHMD = vr::VR_Init( &eError, vr::VRApplication_Scene );
-
+	m_pHMD = vr::VR_Init( &eError, vr::VRApplication_Background);
+	/*
 	if ( eError != vr::VRInitError_None )
 	{
 		m_pHMD = NULL;
@@ -527,7 +530,7 @@ bool CMainApplication::BInit()
 		printf("%s - Unable to initialize OpenGL!\n", __FUNCTION__);
 		return false;
 	}
-
+	*/
 	if (!BInitCompositor())
 	{
 		printf("%s - Failed to initialize VR Compositor!\n", __FUNCTION__);
@@ -724,7 +727,7 @@ bool CMainApplication::HandleInput()
 	{
 		ProcessVREvent( event );
 	}
-
+	printPositionalData();
 	// Process SteamVR action state
 	// UpdateActionState is called each frame to update the state of the actions themselves. The application
 	// controls which action sets are active with the provided array of VRActiveActionSet_t structs.
@@ -798,7 +801,125 @@ bool CMainApplication::HandleInput()
 
 	return bRet;
 }
+void CMainApplication::printDevicePositionalData(const char* deviceName, vr::HmdMatrix34_t posMatrix, vr::HmdVector3_t position, vr::HmdQuaternion_t quaternion)
+{
+	LARGE_INTEGER qpc; // Query Performance Counter for Acquiring high-resolution time stamps.
+					   // From MSDN: "QPC is typically the best method to use to time-stamp events and 
+					   // measure small time intervals that occur on the same system or virtual machine.
+	QueryPerformanceCounter(&qpc);
 
+	// Print position and quaternion (rotation).
+	dprintf("\n%lld, %s, x = %.5f, y = %.5f, z = %.5f, qw = %.5f, qx = %.5f, qy = %.5f, qz = %.5f",
+		qpc.QuadPart, deviceName,
+		position.v[0], position.v[1], position.v[2],
+		quaternion.w, quaternion.x, quaternion.y, quaternion.z);
+
+
+	// Uncomment this if you want to print entire transform matrix that contains both position and rotation matrix.
+	//dprintf("\n%lld,%s,%.5f,%.5f,%.5f,x: %.5f,%.5f,%.5f,%.5f,y: %.5f,%.5f,%.5f,%.5f,z: %.5f,qw: %.5f,qx: %.5f,qy: %.5f,qz: %.5f",
+	//    qpc.QuadPart, whichHand.c_str(),
+	//    posMatrix.m[0][0], posMatrix.m[0][1], posMatrix.m[0][2], posMatrix.m[0][3],
+	//    posMatrix.m[1][0], posMatrix.m[1][1], posMatrix.m[1][2], posMatrix.m[1][3],
+	//    posMatrix.m[2][0], posMatrix.m[2][1], posMatrix.m[2][2], posMatrix.m[2][3],
+	//    quaternion.w, quaternion.x, quaternion.y, quaternion.z);
+
+}
+void CMainApplication::printPositionalData()
+{
+	// Process SteamVR device states
+	for (vr::TrackedDeviceIndex_t unDevice = 0; unDevice < vr::k_unMaxTrackedDeviceCount; unDevice++)
+	{
+		if (!m_pHMD->IsTrackedDeviceConnected(unDevice))
+			continue;
+
+		vr::VRControllerState_t state;
+		if (m_pHMD->GetControllerState(unDevice, &state, sizeof(state)))
+		{
+			vr::TrackedDevicePose_t trackedDevicePose;
+			vr::TrackedDevicePose_t trackedControllerPose;
+			vr::VRControllerState_t controllerState;
+			vr::HmdMatrix34_t poseMatrix;
+			vr::HmdVector3_t position;
+			vr::HmdQuaternion_t quaternion;
+			vr::ETrackedDeviceClass trackedDeviceClass = vr::VRSystem()->GetTrackedDeviceClass(unDevice);
+
+			switch (trackedDeviceClass) {
+			case vr::ETrackedDeviceClass::TrackedDeviceClass_HMD:
+				vr::VRSystem()->GetDeviceToAbsoluteTrackingPose(vr::TrackingUniverseStanding, 0, &trackedDevicePose, 1);
+				// print positiona data for the HMD.
+				poseMatrix = trackedDevicePose.mDeviceToAbsoluteTracking; // This matrix contains all positional and rotational data.
+				position = GetPosition(trackedDevicePose.mDeviceToAbsoluteTracking);
+				quaternion = GetRotation(trackedDevicePose.mDeviceToAbsoluteTracking);
+
+				printDevicePositionalData("HMD", poseMatrix, position, quaternion);
+
+				break;
+
+			case vr::ETrackedDeviceClass::TrackedDeviceClass_GenericTracker:
+				vr::VRSystem()->GetDeviceToAbsoluteTrackingPose(vr::TrackingUniverseStanding, 0, &trackedDevicePose, 1);
+				// print positiona data for a general vive tracker.
+				break;
+
+			case vr::ETrackedDeviceClass::TrackedDeviceClass_Controller:
+				vr::VRSystem()->GetControllerStateWithPose(vr::TrackingUniverseStanding, unDevice, &controllerState,
+					sizeof(controllerState), &trackedControllerPose);
+				poseMatrix = trackedControllerPose.mDeviceToAbsoluteTracking; // This matrix contains all positional and rotational data.
+				position = GetPosition(trackedControllerPose.mDeviceToAbsoluteTracking);
+				quaternion = GetRotation(trackedControllerPose.mDeviceToAbsoluteTracking);
+
+				auto trackedControllerRole = vr::VRSystem()->GetControllerRoleForTrackedDeviceIndex(unDevice);
+				std::string whichHand = "";
+				if (trackedControllerRole == vr::TrackedControllerRole_LeftHand)
+				{
+					whichHand = "LeftHand";
+				}
+				else if (trackedControllerRole == vr::TrackedControllerRole_RightHand)
+				{
+					whichHand = "RightHand";
+				}
+
+				switch (trackedControllerRole)
+				{
+				case vr::TrackedControllerRole_Invalid:
+					// invalid
+					break;
+
+				case vr::TrackedControllerRole_LeftHand:
+				case vr::TrackedControllerRole_RightHand:
+					printDevicePositionalData(whichHand.c_str(), poseMatrix, position, quaternion);
+
+					break;
+				}
+
+				break;
+			}
+
+		}
+	}
+
+}
+vr::HmdQuaternion_t CMainApplication::GetRotation(vr::HmdMatrix34_t matrix) {
+	vr::HmdQuaternion_t q;
+
+	q.w = sqrt(fmax(0, 1 + matrix.m[0][0] + matrix.m[1][1] + matrix.m[2][2])) / 2;
+	q.x = sqrt(fmax(0, 1 + matrix.m[0][0] - matrix.m[1][1] - matrix.m[2][2])) / 2;
+	q.y = sqrt(fmax(0, 1 - matrix.m[0][0] + matrix.m[1][1] - matrix.m[2][2])) / 2;
+	q.z = sqrt(fmax(0, 1 - matrix.m[0][0] - matrix.m[1][1] + matrix.m[2][2])) / 2;
+	q.x = copysign(q.x, matrix.m[2][1] - matrix.m[1][2]);
+	q.y = copysign(q.y, matrix.m[0][2] - matrix.m[2][0]);
+	q.z = copysign(q.z, matrix.m[1][0] - matrix.m[0][1]);
+	return q;
+}
+
+vr::HmdVector3_t CMainApplication::GetPosition(vr::HmdMatrix34_t matrix) {
+	vr::HmdVector3_t vector;
+
+	vector.v[0] = matrix.m[0][3];
+	vector.v[1] = matrix.m[1][3];
+	vector.v[2] = matrix.m[2][3];
+
+	return vector;
+}
 //-----------------------------------------------------------------------------
 // Purpose:
 //-----------------------------------------------------------------------------
@@ -806,17 +927,17 @@ void CMainApplication::RunMainLoop()
 {
 	bool bQuit = false;
 
-	SDL_StartTextInput();
-	SDL_ShowCursor( SDL_DISABLE );
+	//SDL_StartTextInput();
+	//SDL_ShowCursor( SDL_DISABLE );
 
 	while ( !bQuit )
 	{
 		bQuit = HandleInput();
 
-		RenderFrame();
+		//RenderFrame();
 	}
 
-	SDL_StopTextInput();
+	//SDL_StopTextInput();
 }
 
 
